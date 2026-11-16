@@ -1,0 +1,3 @@
+# The Reading Room
+A quiet digital reading desk, with no audio, video, or ornamental activity.
+Typography: Georgia for literary headings and the large tabular timer; system sans for controls and small labels. Palette: ivory paper #f5f2e9, ink #293e34, muted forest #536d58, pale sage #e4e9dd, warm gray #817f73. Layout: a narrow library masthead, generous central timer card, initials on bookplate-like member tiles, and a compact optional correspondence panel. Mobile stacks into one column with generous touch targets. Imagery: CSS linework and a small open-book mark; no stock photos. Motion: subtle state transitions only, honoring reduced motion. Diagnostics and usage belong in an owner-only drawer. Timer and presence are deliberate interaction feedback.

@@ -1,0 +1,16 @@
+# Copy to .dev.vars for LOCAL use only. Never set LOCAL_DEMO in production.
+LOCAL_DEMO=true
+OWNER_SECRET=replace-with-a-long-random-owner-key
+# RESEND_API_KEY=
+# OWNER_EMAIL=
+# EMAIL_FROM=
+# USAGE_SNAPSHOT_URL=
+# USAGE_SNAPSHOT_TOKEN=
+
+# Supabase public and server credentials (never expose the service role key)
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+# Cloudflare account-wide read-only Analytics token (not needed for unconnected local UI)
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_ANALYTICS_TOKEN=
