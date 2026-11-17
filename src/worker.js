@@ -1,4 +1,5 @@
 import {initial,assess,meters,configure,resume} from './budget.js';
+import {youtubeId} from './youtube.js';
 import {collectUsage} from './provider-usage.js';
 const policy={'Cache-Control':'no-store','Permissions-Policy':'camera=(), microphone=()','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'};
 const json=(v,status=200)=>Response.json(v,{status,headers:policy});
@@ -28,11 +29,11 @@ export class StudyRoom {
   if(!this.env.SUPABASE_URL||!this.env.SUPABASE_SERVICE_ROLE_KEY)return null;
   const r=await fetch(`${this.env.SUPABASE_URL}/rest/v1/study_room?id=eq.1&select=payload`,{headers:{apikey:this.env.SUPABASE_SERVICE_ROLE_KEY,Authorization:`Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`},signal:AbortSignal.timeout(8000)});
   if(!r.ok)throw Error('Unable to check the database room status.');
-  const rows=await r.json();return rows[0]?.payload?.paused??null;
+  const rows=await r.json();this.roomTimer=rows[0]?.payload?.timer;return rows[0]?.payload?.paused??null;
  }
  async user(req){const token=req.headers.get('X-Study-Token');if(!token)throw Error('Sign in to join the room.');const r=await fetch(`${this.env.SUPABASE_URL}/auth/v1/user`,{headers:{apikey:this.env.SUPABASE_PUBLISHABLE_KEY,Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error('Your study session expired. Please rejoin.');return (await r.json()).id;}
  async latch(){await this.ctx.storage.deleteAlarm();try{await this.db('pause');}catch{this.data.budget.reason+=' Database pause delivery pending; API writes remain blocked.';}await this.save();}
- async gate(cost={requests:1,storageWrites:4,realtime:12,egress:1048576}){
+ async gate(cost={requests:1,storageWrites:4,realtime:12,egress:2097152}){
   const b=this.data.budget;if(b.paused)return false;
   const ok=assess(b,cost,Date.now(),this.production);await this.save();if(!ok)await this.latch();return ok;
  }
@@ -55,7 +56,7 @@ export class StudyRoom {
    if(p==='/api/owner'){
     if(!owner)return json({error:'Owner key required'},401);
     if(!b.paused&&!assess(b,{},Date.now(),this.production))await this.latch();
-    return json({databasePaused:await this.databasePaused(),invite:this.data.invite,budget:b,meters:meters(b),demo:!this.production,emailReady:!!(this.env.RESEND_API_KEY&&this.env.OWNER_EMAIL&&this.env.EMAIL_FROM),unknown:b.provider?.unknown||['Provider usage has not been checked. Connect Supabase and Cloudflare analytics, then refresh.'],providerConfigured:!!(this.env.CLOUDFLARE_ACCOUNT_ID&&this.env.CLOUDFLARE_ANALYTICS_TOKEN)});
+    return json({databasePaused:await this.databasePaused(),timer:this.roomTimer,invite:this.data.invite,budget:b,meters:meters(b),demo:!this.production,emailReady:!!(this.env.RESEND_API_KEY&&this.env.OWNER_EMAIL&&this.env.EMAIL_FROM),unknown:b.provider?.unknown||['Provider usage has not been checked. Connect Supabase and Cloudflare analytics, then refresh.'],providerConfigured:!!(this.env.CLOUDFLARE_ACCOUNT_ID&&this.env.CLOUDFLARE_ANALYTICS_TOKEN)});
    }
    if(p.startsWith('/api/owner/')){
     if(!owner)return json({error:'Owner key required'},401);if(req.method!=='POST')return json({error:'POST required'},405);const body=await readBody(req);
@@ -67,6 +68,18 @@ export class StudyRoom {
      resume(b,Date.now(),this.production);try{await this.db('resume');}catch(e){b.paused=true;b.reason=e.message;await this.save();throw e;}await this.ctx.storage.setAlarm(Date.now()+60000);
     }
     else if(p.endsWith('/refresh')){await this.refresh();await this.gate({});}
+    else if(p.endsWith('/timers')){
+     if(!await this.gate())return json({paused:true,error:b.reason},423);
+     const result=await this.db('timerSettings',null,null,true,body);
+     if(result.error)throw Error(result.error);
+     await this.save();return json(result);
+    }
+    else if(p.endsWith('/schedule')){
+     if(!['scheduleAdd','scheduleRemove'].includes(body.type))throw Error('Unknown schedule action');
+     if(!await this.gate())return json({paused:true,error:b.reason},423);
+     const result=await this.db(body.type,null,null,true,body);
+     if(result.error)throw Error(result.error);
+    }
     else if(p.endsWith('/rotate')){await this.db('revoke');this.data.invite=crypto.randomUUID();b.paused=true;b.reason='Invitation replaced. Resume after reviewing membership.';await this.latch();}
     else return json({error:'Unknown owner action'},404);
     await this.save();await this.warnings();return json({ok:true});
@@ -76,15 +89,21 @@ export class StudyRoom {
    if(!await this.gate()){await this.warnings();return p.startsWith('/room/')?pausedPage():json({paused:true,error:b.reason},423);}
    await this.warnings();
    if(p.startsWith('/room/'))return this.env.ASSETS.fetch(new Request(new URL('/index.html',req.url)));
+   if(p==='/api/schedule'){
+    const r=await fetch(`${this.env.SUPABASE_URL}/rest/v1/rpc/study_schedule`,{method:'POST',headers:{apikey:this.env.SUPABASE_SERVICE_ROLE_KEY,Authorization:`Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(8000)});
+    if(!r.ok)throw Error('Schedule setup is pending. Apply migration 002_schedule_and_seating.sql.');
+    return json({sessions:await r.json()});
+   }
    if(p==='/api/status')return json({paused:false,configured:!!(this.env.SUPABASE_URL&&this.env.SUPABASE_PUBLISHABLE_KEY),url:this.env.SUPABASE_URL,key:this.env.SUPABASE_PUBLISHABLE_KEY});
    if(req.method!=='POST')return json({error:'POST required'},405);
    const body=await readBody(req),uid=await this.user(req);
    if(p==='/api/join'){
-    const result=await this.db('join',uid,String(body.name||'').trim().slice(0,32),owner);
+    const result=await this.db('join',uid,String(body.name||'').trim().slice(0,32),owner,body);
     if(!b.paused)await this.ctx.storage.setAlarm(Date.now()+60000);return json(result,result.error?400:200);
    }
    if(p==='/api/action'){
-    if(!['chat','start','pauseTimer','reset','mode','heartbeat','leave'].includes(body.type))throw Error('Unknown action');
+    if(!['chat','start','pauseTimer','reset','mode','heartbeat','leave','seat','color','queueAdd','queueRemove','queueNext'].includes(body.type))throw Error('Unknown action');
+    if(body.type==='queueAdd')body.videoId=youtubeId(body.url);
     const result=await this.db(body.type,uid,null,owner,body);return json(result,result.error?400:200);
    }
    return json({error:'Unknown endpoint'},404);
@@ -102,7 +121,7 @@ export class StudyRoom {
  alarm(){return this.serial(async()=>{
   if(this.data.budget.paused)return;
   try{if(this.production)await this.refresh();}catch{this.data.budget.provider=null;}
-  if(await this.gate({requests:1,storageWrites:4,realtime:12,egress:1048576}))await this.ctx.storage.setAlarm(Date.now()+60000);
+  if(await this.gate({requests:1,storageWrites:4,realtime:12,egress:2097152}))await this.ctx.storage.setAlarm(Date.now()+60000);
   await this.warnings();
  });}
 }

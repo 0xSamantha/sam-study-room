@@ -1,6 +1,6 @@
 # The Reading Room
 
-An invite-only, silent study room: synchronized 25-minute focus / 5-minute break clock, owner timer controls, initials tiles, optional text chat, and a separate owner usage desk. Never requests camera or microphone access.
+An invite-only, silent study room: synchronized owner-configurable focus and break clock, owner timer controls, initials tiles, optional text chat, and a separate owner usage desk. Never requests camera or microphone access.
 
 **Status:** implemented and locally tested; not deployed or connected to a Supabase project. Production intentionally fails closed until current built-in provider readings and warning email credentials are configured. Unknown/late meters are labeled; this app is not a guarantee of a cutoff below 98%.
 
@@ -47,7 +47,7 @@ The production app is not connected to any provider account here. Account provis
 
 Defaults: warn at 90%; nominal pause at 97%; a configurable 2 percentage point reserve makes the effective pause 95%. Warning must remain below the effective pause; nominal pause cannot exceed 97%. Provider delays may require a larger reserve, and no fixed reserve can guarantee staying below 98% under unbounded external traffic.
 
-Daily app budgets: 10,000 routed requests, 10,000 write reservations, 20,000 real-time delivery reservations, 100 MB egress reservations, 20 warning emails. Each admitted action conservatively reserves 4 database/guard writes, 12 deliveries (the maximum room size), and 1 MiB fanout traffic. These are **app budgets**, not account-wide provider counters. They deliberately sacrifice capacity for margin. Warnings and guard cleanup consume their own reserved headroom. Provider snapshots are separately displayed.
+Daily app budgets: 10,000 routed requests, 10,000 write reservations, 20,000 real-time delivery reservations, 100 MB egress reservations, 20 warning emails. Each admitted action conservatively reserves 4 database/guard writes, 12 deliveries (the maximum room size), and 2 MiB fanout traffic. These are **app budgets**, not account-wide provider counters. They deliberately sacrifice capacity for margin. Warnings and guard cleanup consume their own reserved headroom. Provider snapshots are separately displayed.
 
 Reservations happen before auth/database activity, are persisted, and are not refunded if an operation fails. One Durable Object serializes them across requests. Quota crossing latches the API closed, removes its periodic usage alarm, and attempts a final Supabase pause transaction. No subsequent room API write is allowed. Already paused requests do not write guard storage. Owner review actions and warning delivery remain possible, consuming some resources. Provider accounts must be dedicated or include unrelated consumption in usage snapshots.
 
@@ -83,3 +83,22 @@ The owner dashboard shows reservations, percentages, resets, last check, reporti
 `npm test` uses embedded PostgreSQL (PGlite) for the real migration, timer persistence, pause enforcement and access policies, plus simulated coordinator budgets, concurrent joins near the limit, monthly warning deduplication, stale telemetry, cycle rollover and safe resume. It does not consume live provider quota. Supabase publication delivery itself is not simulated by PGlite.
 
 `npm run build` bundles the Supabase client locally. `npm run check` checks server and source JS. Optional `SMOKE_OWNER_KEY=... node scripts/smoke.mjs` checks the running local HTTP app without Supabase/email calls. Rendered desktop/mobile QA could not be performed because the browser-control host was unavailable. Live Supabase auth/realtime, account-specific Cloudflare GraphQL permissions/schema and real email require account configuration and remain unverified. Built-in collectors are tested against simulated provider responses; unsupported analytics schemas fail closed.
+
+## Study-group schedule and LED table
+
+For an existing installation, run `supabase/migrations/002_schedule_and_seating.sql` once in Supabase SQL Editor. Do not rerun migration 001. For a fresh installation, run 001 and then 002 in order. Migration 002 preserves website tables and current room data, adds member seat/color fields and a private schedule table, and updates the server-only mutation function in one transaction.
+
+As owner, open Room settings → Plan a study group. Add a title, local start/end times and optional notes, then publish. Sessions appear in Upcoming study groups; each visitor sees their own local timezone. Use Remove session to cancel or replace a session. Publishing is owner-only, respects room pause and quota checks, and does not automatically start a timer. Up to 24 sessions may be stored, with sessions limited to twelve hours.
+
+Choose an empty seat around the circular study table, then enter your display name and take a seat. You can also join without selecting one and receive the first available seat. Select another empty dot to move once connected. Guest LED colors are blue, green, amber, violet, cyan and orange. The server fixes owner LEDs to pink; guests cannot claim pink. Occupied seats show names and owner labels as well as their colors. Seat claims are serialized with a database lock and a unique seat index; if two people choose the same seat, only the first succeeds.
+
+
+## YouTube queue and custom timer durations
+
+After installing migrations 001 and 002, run `supabase/migrations/003_videos_and_timer_settings.sql` once. It extends the room mutation function without replacing room data or changing website tables.
+
+Owner settings → Timer durations accepts 1–240 whole minutes for each mode. Saving resets and pauses the active clock for everyone. Mode switches and Reset use the saved durations, and late joiners receive the same timer state. These controls do not resume a room paused by its usage guard.
+
+Once seated, anyone can paste a YouTube video link with an optional label into the shared queue. The queue holds up to twenty distinct videos. Guests can remove their own additions; the owner can remove any video or advance the queue. Standard watch, short-link, Shorts, live-video and embed URLs are accepted; playlists and unrelated hosts are rejected. No YouTube Data API key or server-side metadata fetching is used.
+
+Watch loads the video directly from YouTube's privacy-enhanced embed host on that device, without autoplay. Playback is personal; play/pause positions are not synchronized. Queue changes are shared through Supabase. Advancing/removing a currently watched item unloads it, and room pause also unloads the player. Some videos cannot be embedded; Open on YouTube is available as a fallback. YouTube handles its own playback/network traffic, outside the room hosting quota. The site still never requests camera or microphone permissions.
