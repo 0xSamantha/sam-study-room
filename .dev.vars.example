@@ -1,16 +1,9 @@
-# Copy to .dev.vars for LOCAL use only. Never set LOCAL_DEMO in production.
-LOCAL_DEMO=true
-OWNER_SECRET=replace-with-a-long-random-owner-key
+# Private local configuration. This file is an example; .dev.vars is ignored.
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-public-publishable-key
+OWNER_SECRET=replace-with-a-unique-random-32-character-or-longer-password
+# For warning email delivery (server-only):
 # RESEND_API_KEY=
 # OWNER_EMAIL=
 # EMAIL_FROM=
-# USAGE_SNAPSHOT_URL=
-# USAGE_SNAPSHOT_TOKEN=
-
-# Supabase public and server credentials (never expose the service role key)
-SUPABASE_URL=
-SUPABASE_PUBLISHABLE_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-# Cloudflare account-wide read-only Analytics token (not needed for unconnected local UI)
-CLOUDFLARE_ACCOUNT_ID=
-CLOUDFLARE_ANALYTICS_TOKEN=
+# ALLOWED_ORIGINS=https://0xsamantha.github.io,http://localhost:8787

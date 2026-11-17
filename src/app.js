@@ -7,17 +7,30 @@ let activeVideoId=null,previewTimer=null;
 const guestColors=['#59b8ff','#66db9b','#ffc65b','#b995ff','#56dce2','#ff965b'];
 const notify=t=>$('notice').textContent=t;
 const escapeNode=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
-async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json'}:{}),...(accessToken?{'X-Study-Token':accessToken}:{})},body:body?JSON.stringify(body):undefined});const d=await r.json();if(r.status===423||d.paused){pause();return d;}if(!r.ok)throw Error(d.error||'Request failed');return d;}
+const config=globalThis.STUDY_CONFIG||{};
+const ownerStorageKey=`study-owner:${config.supabaseUrl||'unconfigured'}`;
+let ownerSession=localStorage.getItem(ownerStorageKey)||'';
+function endpoint(path){
+ if(!config.supabaseUrl||!config.publishableKey)throw Error('This site needs its public Supabase configuration.');
+ return `${config.supabaseUrl}/functions/v1/study-api${path}`;
+}
+async function api(path,body){
+ if(path.startsWith('/api/owner')&&!ownerSession)throw Error('Unlock room settings with your owner key.');
+ let r;try{r=await fetch(endpoint(path),{method:body?'POST':'GET',headers:{apikey:config.publishableKey,...(body?{'Content-Type':'application/json'}:{}),...(accessToken?{'X-Study-Token':accessToken}:{}),...(ownerSession?{'X-Owner-Token':ownerSession}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});}catch{throw Error('The Supabase room service is unavailable. Check the connection or finish deploying study-api.');}
+ const d=await r.json();if(r.status===423||d.paused){pause();return d;}
+ if(r.status===401&&path.startsWith('/api/owner')){ownerSession='';owner=false;localStorage.removeItem(ownerStorageKey);$('ownerLogin').hidden=false;$('dashboard').hidden=true;}
+ if(!r.ok)throw Error(d.error||'Request failed');return d;
+}
 if(invite)$('inviteHint').textContent='Your invitation is ready. Pull up a chair.';
 function pause(){clearVideo();stopped=true;supabase?.auth.stopAutoRefresh();supabase?.realtime.disconnect();socket?.close();socket=null;state=null;$('entry').hidden=true;$('sync').textContent='Room paused';notify('Study room paused. The owner must review usage before reopening. No live connection is active.');disable();}
 function disable(){for(const id of ['start','reset','focusMode','breakMode'])$(id).disabled=!owner||!socket||socket.readyState!==1;$('chatInput').disabled=!socket||socket.readyState!==1;$('videoAdd').disabled=!socket||socket.readyState!==1;$('queueNext').disabled=!owner||!socket||socket.readyState!==1;}
 disable();
 $('joinForm').onsubmit=async e=>{e.preventDefault();try{
  if(!invite)throw Error('Open an invitation link first.');
- const config=await api(`/api/status?invite=${encodeURIComponent(invite)}`);
- if(config.paused)return pause();if(!config.configured)throw Error('Supabase is not connected yet. The owner needs to complete server setup.');
+ const roomStatus=await api(`/api/status?invite=${encodeURIComponent(invite)}`);
+ if(roomStatus.paused)return pause();if(!roomStatus.configured)throw Error('Supabase is not connected yet. The owner needs to complete server setup.');
  stopped=false;
- if(!supabase){supabase=createClient(config.url,config.key);supabase.auth.onAuthStateChange((_event,s)=>{accessToken=s?.access_token;});}
+ if(!supabase){supabase=createClient(config.supabaseUrl,config.publishableKey);supabase.auth.onAuthStateChange((_event,s)=>{accessToken=s?.access_token;});}
  let session=(await supabase.auth.getSession()).data.session;
  if(!session){const result=await supabase.auth.signInAnonymously();if(result.error)throw result.error;session=result.data.session;}
  accessToken=session.access_token;currentUserId=session.user.id;supabase.auth.startAutoRefresh();
@@ -38,8 +51,12 @@ function render(){const t=state.timer;renderTimerDurations(t);renderQueue();$('f
 $('start').onclick=()=>send({type:state?.timer.end?'pause':'start'});$('reset').onclick=()=>send({type:'reset'});$('focusMode').onclick=()=>send({type:'mode',mode:'focus'});$('breakMode').onclick=()=>send({type:'mode',mode:'break'});
 $('chatToggle').onclick=()=>{const open=$('chatArea').hidden;$('chatArea').hidden=!open;$('chatToggle').textContent=open?'Close −':'Open +';$('chatToggle').setAttribute('aria-expanded',open);};$('chatForm').onsubmit=e=>{e.preventDefault();send({type:'chat',text:$('chatInput').value});$('chatInput').value='';};
 $('ownerOpen').onclick=async()=>{$('ownerDialog').showModal();try{await loadOwner();}catch{}};
-$('loginForm').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/api/auth',{method:'POST',headers:{Authorization:`Bearer ${$('ownerKey').value}`,'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw Error('Owner key was not accepted.');$('ownerKey').value='';await loadOwner();}catch(e){$('ownerError').textContent=e.message;}};
-async function loadOwner(){const d=await api('/api/owner');owner=true;configureOwnerSeat();if(d.timer){previewTimer=d.timer;renderTimerDurations(d.timer,true);tick();}disable();$('ownerLogin').hidden=true;$('dashboard').hidden=false;$('environment').textContent=d.demo?'LOCAL TEST · App budgets are enforced. Supabase is live; email and complete provider checks may be unconfigured.':'Provider guard enabled · partial, delayed meters plus app budgets. Unknown limits are listed below.';$('ownerHint').textContent='Join the room to start a session.';$('quotaList').replaceChildren();for(const q of d.meters){const n=escapeNode('div','');n.className='meter';const row=escapeNode('div','');row.className='section-title';row.append(escapeNode('strong',q.name),escapeNode('span',`${q.percent.toFixed(1)}% · ${q.used.toLocaleString()} / ${q.limit.toLocaleString()}`));const bar=document.createElement('progress');bar.max=100;bar.value=q.percent;n.append(row,bar,escapeNode('small',q.note||q.source),escapeNode('small',`Resets ${q.resets||'does not reset'} · Checked ${q.checked||d.budget.provider?.checked&&new Date(d.budget.provider.checked).toISOString()||'not yet'}`));$('quotaList').append(n);}$('unknown').replaceChildren(...d.unknown.map(x=>escapeNode('li',x)));$('emailStatus').textContent=d.emailReady?'Warning email credentials configured. Check delivery status below.':'Email is not configured. Production resume is blocked until delivery credentials are set.';$('warn').value=d.budget.warn;$('stop').value=d.budget.stop;$('buffer').value=d.budget.buffer;$('pauseReason').textContent=(d.budget.paused||d.databasePaused)?`Paused: ${d.budget.reason||'The database is paused. Select Review & resume to reopen it.'}`:'Room open · reservations are checked before joins and writes.';$('inviteUrl').value=`${location.origin}/room/entry?invite=${d.invite}`;invite=d.invite;$('inviteCopy').hidden=false;$('outbox').replaceChildren(...d.budget.outbox.map(x=>escapeNode('p',`${x.text} — ${x.status}`)));$('ownerError').textContent='';$('scheduleManage').hidden=false;await loadSchedule();}
+$('loginForm').onsubmit=async e=>{e.preventDefault();try{
+ const r=await fetch(endpoint('/api/auth'),{method:'POST',headers:{apikey:config.publishableKey,'X-Owner-Key':$('ownerKey').value,'Content-Type':'application/json'},body:'{}'});
+ const d=await r.json();if(!r.ok)throw Error(d.error||'Owner key was not accepted.');
+ ownerSession=d.token;localStorage.setItem(ownerStorageKey,ownerSession);$('ownerKey').value='';await loadOwner();
+ }catch(e){$('ownerError').textContent=e.message;}};
+async function loadOwner(){const d=await api('/api/owner');owner=true;configureOwnerSeat();if(d.timer){previewTimer=d.timer;renderTimerDurations(d.timer,true);tick();}disable();$('ownerLogin').hidden=true;$('dashboard').hidden=false;$('environment').textContent=d.demo?'LOCAL TEST · App budgets are enforced. Supabase is live; email and complete provider checks may be unconfigured.':'Supabase server guard · measured database capacity and conservative app budgets. Unknown limits are listed below.';$('ownerHint').textContent='Join the room to start a session.';$('quotaList').replaceChildren();for(const q of d.meters){const n=escapeNode('div','');n.className='meter';const row=escapeNode('div','');row.className='section-title';row.append(escapeNode('strong',q.name),escapeNode('span',`${q.percent.toFixed(1)}% · ${q.used.toLocaleString()} / ${q.limit.toLocaleString()}`));const bar=document.createElement('progress');bar.max=100;bar.value=q.percent;n.append(row,bar,escapeNode('small',q.note||q.source),escapeNode('small',`Resets ${q.resets||'does not reset'} · Checked ${q.checked||d.budget.provider?.checked&&new Date(d.budget.provider.checked).toISOString()||'not yet'}`));$('quotaList').append(n);}$('unknown').replaceChildren(...d.unknown.map(x=>escapeNode('li',x)));$('emailStatus').textContent=d.emailReady?'Warning email credentials configured. Check delivery status below.':'Email is not configured. Production resume is blocked until delivery credentials are set.';$('warn').value=d.budget.warn;$('stop').value=d.budget.stop;$('buffer').value=d.budget.buffer;$('pauseReason').textContent=(d.budget.paused||d.databasePaused)?`Paused: ${d.budget.reason||'The database is paused. Select Review & resume to reopen it.'}`:'Room open · reservations are checked before joins and writes.';$('inviteUrl').value=`${location.origin}${location.pathname}?invite=${encodeURIComponent(d.invite)}`;invite=d.invite;$('inviteCopy').hidden=false;$('outbox').replaceChildren(...d.budget.outbox.map(x=>escapeNode('p',`${x.text} — ${x.status}`)));$('ownerError').textContent='';$('scheduleManage').hidden=false;await loadSchedule();}
 async function action(name,body={}){try{await api(`/api/owner/${name}`,body);await loadOwner();if(name==='pause')pause();if(name==='resume'){stopped=false;$('entry').hidden=false;$('sync').textContent='○ Ready to join';notify('Room reopened. Enter your name and take a seat.');}}catch(e){$('ownerError').textContent=e.message;}}
 $('thresholdForm').onsubmit=e=>{e.preventDefault();action('settings',{warn:+$('warn').value,stop:+$('stop').value,buffer:+$('buffer').value});};$('pauseRoom').onclick=()=>action('pause');$('resumeRoom').onclick=()=>action('resume');$('refreshUsage').onclick=()=>action('refresh');$('rotateInvite').onclick=()=>action('rotate');$('inviteCopy').onclick=async()=>{try{await navigator.clipboard.writeText($('inviteUrl').value);notify('Invitation copied. Share it with your study companions.');}catch{notify('Copy the invitation from room settings.');}};
 
@@ -110,7 +127,7 @@ $('scheduleForm').onsubmit=async e=>{e.preventDefault();
 renderTable();
 if(invite)loadSchedule();
 
-// Restore the HttpOnly owner session on every page, including invitation tabs.
+// Restore the signed owner session on this browser, including invitation tabs.
 loadOwner().catch(()=>{}).finally(()=>{
  if(new URL(location.href).searchParams.get('settings')==='1')$('ownerDialog').showModal();
 });

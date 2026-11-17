@@ -71,3 +71,36 @@ test('video queue allows member contributions, prevents spoofing and enforces re
  s=await run('queueNext',uid,true,{});assert.equal(s.queue.length,0);
  await command('pause');s=await run('queueAdd',other,false,{videoId:'dQw4w9WgXcQ'});assert.equal(s.paused,true);await command('resume');
 });
+
+async function gateway(action,owner=false,payload={},invite=null,user=null){
+ const r=await db.query('select public.study_gateway($1,$2,$3,$4,$5) as result',[action,owner,invite,user,JSON.stringify(payload)]);return r.rows[0].result;
+}
+test('Supabase gateway migrates safely and protects owner/invite boundaries',async()=>{
+ await db.exec(await readFile(new URL('../supabase/migrations/004_supabase_gateway.sql',import.meta.url),'utf8'));
+ assert.equal((await gateway('owner')).status,401);
+ assert.equal((await gateway('status',false,{},'bad')).status,403);
+ const owner=await gateway('owner',true);assert.equal(owner.budget.paused,true);assert.ok(owner.invite);assert.equal(owner.meters.length,6);
+ assert.equal((await gateway('owner/resume',true)).ok,true);
+ assert.equal((await gateway('status',false,{},owner.invite)).paused,false);
+ const data=await db.query('select message from public.site_hello');assert.equal(data.rows[0].message,'website remains intact');
+ await db.exec('set role authenticated');await assert.rejects(db.exec("select public.study_gateway('owner',true)"),/permission denied/);await db.exec('reset role');
+});
+test('database reservations serialize two joins near a cutoff and latch the pause',async()=>{
+ await db.exec("delete from study_private.members;update study_private.guard set paused=false,counts=jsonb_set('{\"requests\":0,\"storageWrites\":0,\"realtime\":0,\"egress\":0,\"emails\":0}'::jsonb,'{requests}','9498');");
+ const {invite}=await gateway('owner',true);
+ const results=await Promise.all([gateway('join',false,{name:'Alice',seat:1},invite,uid),gateway('join',false,{name:'Bob',seat:2},invite,other)]);
+ assert.equal(results[0].members.length,1);assert.equal(results[1].status,423);
+ const members=await db.query('select count(*)::int as n from study_private.members');assert.equal(members.rows[0].n,1);
+ const counts=(await gateway('owner',true)).budget.counts;assert.equal(counts.requests,9499);
+ assert.equal((await gateway('join',false,{name:'Bob'},invite,other)).status,423);
+ assert.equal((await gateway('owner/resume',true)).status,409);
+});
+test('pause survives daily reset and warnings have one event per quota/reset',async()=>{
+ const before=(await db.query('select count(*)::int as n from study_private.warnings')).rows[0].n;
+ await gateway('owner',true);assert.equal((await db.query('select count(*)::int as n from study_private.warnings')).rows[0].n,before);
+ await db.exec("update study_private.guard set cycle=cycle-1");
+ assert.equal((await gateway('owner',true)).budget.paused,true);
+ assert.equal((await gateway('owner/resume',true)).ok,true);
+ const w=await db.query('select public.study_warning_claim() as w');assert.ok(w.rows[0].w);
+ const again=await db.query('select public.study_warning_claim() as w');assert.equal(again.rows[0].w,null);
+});

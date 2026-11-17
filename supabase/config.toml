@@ -1,0 +1,5 @@
+project_id = "sam-study-room"
+
+[functions.study-api]
+# Public preflight/status + custom owner token. User JWTs are verified inside the handler.
+verify_jwt = false

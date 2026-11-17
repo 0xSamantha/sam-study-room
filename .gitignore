@@ -3,3 +3,6 @@ node_modules/
 .dev.vars
 .env
 .openai/
+supabase/.temp/
+supabase/functions/.env
+*.secrets.env

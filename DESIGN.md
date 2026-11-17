@@ -7,3 +7,6 @@ Preserve the warm paper, ink, green accent and Georgia typography. Replace bookp
 
 ## Optional video queue and adjustable clock
 Remove the decorative table and fixed-duration footer captions. Keep focus/break labels tied to actual owner-configured durations. Use a compact, owner-only duration form with a clear notice that saving resets and pauses the active clock. Add a full-width paper video card below the table: shared ordered queue, labeled YouTube URL/title inputs, and a responsive embedded player that loads only on an explicit Watch action. Playback is personal, never autoplayed or forcibly synchronized; the room still never requests camera or microphone permissions. Preserve the existing typography, palette, LED seating and reduced-motion behavior.
+
+## GitHub Pages delivery
+Keep the same visual identity and layout. Static asset links and invites must work beneath `/sam-study-room/`. A tiny preflight can show a script-free paused page before opening a live room. Private owner controls use the Supabase server; no backend credentials or deployment mechanics appear in the main room experience.

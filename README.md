@@ -1,104 +1,102 @@
-# The Reading Room
+# Trader Samz’ Study Room
 
-An invite-only, silent study room: synchronized owner-configurable focus and break clock, owner timer controls, initials tiles, optional text chat, and a separate owner usage desk. Never requests camera or microphone access.
+An invite-only browser study room hosted on GitHub Pages, with Supabase for room data, real-time updates, authentication and private server controls.
 
-**Status:** implemented and locally tested; not deployed or connected to a Supabase project. Production intentionally fails closed until current built-in provider readings and warning email credentials are configured. Unknown/late meters are labeled; this app is not a guarantee of a cutoff below 98%.
+## Features
 
-## Stack
+- A shared focus/break clock with owner-configurable durations.
+- Twelve selectable seats around a circular table, guest LED colors and a pink owner LED.
+- An owner-published study-group schedule, shown in each visitor’s local time.
+- Optional text notes and a shared YouTube queue with personal, opt-in playback.
+- An owner-only usage dashboard, warning email outbox and a server-enforced pause.
+- No camera or microphone access.
 
-- Cloudflare Workers Free serves static assets and the authenticated API. One SQLite Durable Object serializes budget reservations and stores only guard/owner/invite metadata.
-- Supabase Free stores timer, chat, and memberships. Postgres Changes delivers state to authenticated room members. All writes go through server-only database transactions; clients have SELECT only under RLS. PostgreSQL row locks serialize simultaneous changes independently of the usage coordinator.
-- Resend Free delivers owner warnings. No billing or upgrade API is used.
+## Public website
 
-## Local start
+https://0xsamantha.github.io/sam-study-room/
+
+The interface is a static site. Its requests go to the `study-api` Supabase Edge Function. GitHub Pages does not execute backend code or read private environment files.
+
+## Build and preview
 
 ```sh
 npm install
-cp .dev.vars.example .dev.vars
 npm run build
 npm run dev
 ```
 
-Open http://localhost:8787. The unconnected interface and owner desk can be inspected. The example key unlocks **local settings only**; replace it with a long random value. Never deploy that example key. Local mode skips provider readiness checks but still requires Supabase for joins and real-time data. There is no fake participant roster or simulated working chat in the interface.
+Use Node 22 LTS (see `.nvmrc`). Open http://localhost:8787/sam-study-room/. This previews the same nested path used by GitHub Pages. The backend remains Supabase. To use the backend from this local preview, add `http://localhost:8787` to the server’s comma-separated `ALLOWED_ORIGINS` setting and redeploy it.
 
-To connect a development Supabase project:
+The build reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from `.dev.vars` or the environment and writes only these two public values into `public/config.js` and `docs/config.js`. The publishable key is intended for browser use; row-level security and server authorization protect private operations. Never put the service-role key, owner password, or email API key in public configuration. No private environment values are substituted into the frontend bundle.
 
-1. Create a project on a **Free organization**. Enable anonymous sign-ins in Authentication. No email login is needed for study guests. Keep anonymous auth rate limits; consider Supabase CAPTCHA before sharing widely (the UI does not yet integrate a CAPTCHA widget).
-2. Run `supabase/migrations/001_study_room.sql` once in its SQL editor. This creates the locked mutation RPC, private memberships, read policy and real-time publication. Use a dedicated project for this room.
-3. Set `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SERVICE_ROLE_KEY` in the ignored `.dev.vars`. The service key stays server-only. The publishable key is intentionally public.
-4. Open Room settings, enter the owner key, click Review & resume, then copy the invitation. The database starts paused. Open the invite and take a seat. Only someone with the owner cookie can control the clock. Guests receive anonymous Supabase identities.
+## Existing Supabase installation
 
-Members refresh a lease every two minutes and disappear after three minutes without a refresh. Background timer throttling on phones can make presence expire; rejoin to renew it. The focus timer itself uses a shared absolute end timestamp, so late joins see the same remaining time. Completion waits for the owner to choose the next mode.
+Migrations 001–003 create the room, seating, schedule, YouTube queue and custom timers. If already applied, do not replay them.
 
-## Deploy when accounts and metering are ready
+Migration 004 adds the database-backed usage guard and service-only gateway RPC. It preserves existing website tables and room data, pauses the room during the backend migration, and is safe to reapply without resetting quota counters or changing the invite. Reopening always requires owner review.
 
-The Sites hosting manifest does not expose the arbitrary Durable Object class binding needed by this budget coordinator, so this project uses direct Cloudflare deployment. No Site has been registered or published.
+The project can share the `samantha personal website` Supabase database. Auth settings, capacity and billing allowances are shared, so database size includes the website. All new private tables use `study_private`; existing website tables are not modified.
 
-1. Verify Workers is on Free, Supabase organization is on Free, and Resend is on Free. Keep paid upgrades, add-ons and paid overages disabled. Never infer billing protection from app settings.
-2. `npx wrangler login` for your own Cloudflare account.
-3. Use `npx wrangler secret put NAME` for `OWNER_SECRET`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `OWNER_EMAIL`, `EMAIL_FROM`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ANALYTICS_TOKEN`. Use a verified Resend sender and your recipient email. Create a read-only Cloudflare Analytics token scoped to this account; no billing/write permissions are needed. Keep private keys in server secrets and out of source control.
-4. **Do not set LOCAL_DEMO in production.** It is absent from wrangler.jsonc and only lives in ignored `.dev.vars` locally.
-5. `npm run build`, `npm test`, `npm run check`, then `npm run deploy`. Wrangler does not select or upgrade a paid plan. Review the actual account plan before deploying.
-6. Open settings, refresh provider readings, review delivery readiness and thresholds, then resume. Production remains paused if required data is missing or older than five minutes.
+## Deploy the backend
 
-The production app is not connected to any provider account here. Account provisioning, live quota telemetry, and actual email delivery have not been verified.
+1. Keep your existing `.dev.vars` private. It needs `SUPABASE_URL` and a unique 32+ character `OWNER_SECRET`. Supabase automatically provides the Edge Function’s server-side project credentials.
+2. Configure `RESEND_API_KEY`, `EMAIL_FROM`, and `OWNER_EMAIL` in `.dev.vars` for usage warnings. Use a verified sender and stay on Resend Free. Production resume is blocked until warning delivery is configured.
+3. Sign in using the official CLI:
 
-## Budget and pause behavior
+   ```sh
+   npx --yes supabase login
+   ```
 
-Defaults: warn at 90%; nominal pause at 97%; a configurable 2 percentage point reserve makes the effective pause 95%. Warning must remain below the effective pause; nominal pause cannot exceed 97%. Provider delays may require a larger reserve, and no fixed reserve can guarantee staying below 98% under unbounded external traffic.
+4. Deploy:
 
-Daily app budgets: 10,000 routed requests, 10,000 write reservations, 20,000 real-time delivery reservations, 100 MB egress reservations, 20 warning emails. Each admitted action conservatively reserves 4 database/guard writes, 12 deliveries (the maximum room size), and 2 MiB fanout traffic. These are **app budgets**, not account-wide provider counters. They deliberately sacrifice capacity for margin. Warnings and guard cleanup consume their own reserved headroom. Provider snapshots are separately displayed.
+   ```sh
+   npm run deploy:backend
+   ```
 
-Reservations happen before auth/database activity, are persisted, and are not refunded if an operation fails. One Durable Object serializes them across requests. Quota crossing latches the API closed, removes its periodic usage alarm, and attempts a final Supabase pause transaction. No subsequent room API write is allowed. Already paused requests do not write guard storage. Owner review actions and warning delivery remain possible, consuming some resources. Provider accounts must be dedicated or include unrelated consumption in usage snapshots.
+The deploy script applies only migration 004 through the authenticated Management API, uploads a strict allowlist of server settings using a temporary permission-restricted file, deletes that file, and deploys `study-api`. It does not replay migrations 001–003 or reset your database. The room stays paused for review after deployment.
 
-Clients receiving the paused state unsubscribe, disconnect Supabase Realtime, stop their presence heartbeat, and stop auth refresh. The invitation then serves a small HTML/CSS paused page with no JavaScript or Supabase connection. If the final database pause notification fails, API writes are still blocked; previously connected clients may remain subscribed. Supabase does not offer an app-level guarantee of forcibly closing every underlying client socket. Use Supabase Dashboard → Realtime settings to disable Realtime for a dedicated project when needed; changing settings disconnects clients. This is a documented manual fallback, not an implemented automatic management API integration.
+`ALLOWED_ORIGINS` defaults to `https://0xsamantha.github.io`. Origin restrictions are additional protection; the server independently validates every owner token, invite and user session. Public status requests and owner login require `verify_jwt = false` at the Edge Function gateway; user JWTs are verified against Supabase Auth inside the function. Only the function’s service-role identity can execute the mutation gateway.
 
-RLS gates reads to members. All direct client mutations and the mutation RPC are denied to anon/authenticated roles. Invite rotation removes memberships and pauses the room. A stale member token cannot mutate through the API or read future room changes. Auth identities remain in Supabase and count toward provider usage; automatic cleanup is deliberately not enabled.
+`ALLOW_TEST_WITHOUT_EMAIL=true` is a server-only development escape hatch. The deploy script deliberately does not upload it. Do not use it for the published room.
 
-Pause is latched across daily rollover. Resume requires explicit owner action and readings below the buffered threshold. The host still receives traffic and static asset requests during pause. Malicious clients may call public Supabase Auth endpoints or retain low-level subscriptions; app budgets cannot prevent all such provider usage.
+## Publish to GitHub Pages
 
-## Provider usage and unknown limits
+The build output is `docs/`. All assets use relative URLs so the site works under `/sam-study-room/`, and invite links stay on the same page rather than relying on server routes.
 
-The built-in collector calls the server-only `study_usage()` RPC to measure Supabase database capacity, then reads account-wide Worker and Durable Object request totals through Cloudflare GraphQL. It checks every minute while open. Failed, invalid or older-than-five-minute observations latch the room closed. Supabase database capacity is shown with no reset; Cloudflare daily requests reset at 00:00 UTC. Analytics is delayed/adaptive and cannot establish a precise cutoff.
+The included GitHub Actions workflow builds and publishes `docs/`. In the repository’s Settings → Pages, select GitHub Actions as the publishing source. Alternatively, publish `main` → `/docs` using the legacy branch workflow. Use one publishing method at a time.
 
-No complete automatic billing feed is assumed for Supabase real-time messages, egress or MAU, Resend account-wide emails, or Cloudflare DO duration and SQLite row/storage accounting. The owner desk lists these explicitly as unknown, with their plan limits and caveats. Room fanout/egress/writes and warning attempts have conservative app budgets; they exclude direct service traffic, reconnects and unrelated account consumption. The Supabase Management API's API request counts are not treated as billable real-time message totals. Keep dedicated free accounts/projects and check provider dashboards as well.
+The checked-in `public/config.js` is enough for builds when public settings are unchanged. Optional repository variables `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` override those values in Actions. Never add private backend secrets as Pages build variables.
 
-An optional trusted HTTPS adapter can supplement/replace the collector using `USAGE_SNAPSHOT_URL` and `USAGE_SNAPSHOT_TOKEN`. It must return `{checked: <epoch milliseconds>, meters: [...]}` with at least `workerRequests`, `doRequests`, `supabaseDatabase`. Each meter has `key`, `name`, `used`, `limit`, `resets` (ISO date or null for capacity), `checked` (original measurement time), and `note` describing delay/scope. It may also include `unknown` labels and further provider quotas. Billing resets must come from the provider, not an assumed calendar month. Missing/invalid required observations fail closed. Never manufacture fresh zeros for unavailable usage.
+## Open the room
 
-The owner dashboard shows reservations, percentages, resets, last check, reporting limitations, thresholds and warning delivery states. Warnings use a persisted per-quota/per-reset identifier, including monthly provider cycles, plus a Resend idempotency key. A failed/uncertain delivery is surfaced for review rather than described as sent. The app can protect the room; **the providers' Free plans protect the bill**. A Pro spend cap is not a universal dollar cap.
+Visit the website, open Room settings and enter your owner password. The server returns a signed 24-hour owner token, stored in this browser; the password itself is not saved in browser storage. Owner access therefore works across tabs without relying on cross-site cookies. Rotating the server owner password invalidates existing tokens.
 
-## Provider verification (2026-11-12)
+Review usage and warning delivery readiness, then choose Review & resume. Copy the newly generated invitation: the migrated backend uses a new invite, so old local-server invites no longer work. Friends open it, enter a display name, select a seat/color and join through an anonymous Supabase identity.
 
-- [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/): Free has 100,000 requests/day, reset at 00:00 UTC. Static assets and rejected API requests have different accounting; the app request counter is not account-wide hosting usage.
-- [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/): SQLite on Free; 100,000 requests/day, 13,000 GB-s/day, 5 million row reads/day, 100,000 row writes/day, 5 GB total SQL storage. Free operations fail at limits; no paid overage without moving to Paid. Daily limits reset at 00:00 UTC. Capacity does not reset.
-- [Cloudflare analytics](https://developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/): GraphQL is available, with delayed/adaptive reporting and special WebSocket accounting.
-- [Supabase pricing](https://supabase.com/pricing) and [billing](https://supabase.com/docs/guides/platform/billing-on-supabase): Free includes 500 MB database, 5 GB egress, 50,000 MAU and 2 million real-time messages. Free projects may pause after a week of inactivity. No file storage is used here.
-- [Supabase real-time limits](https://supabase.com/docs/guides/realtime/limits): Free includes 200 concurrent connections and 100 messages/sec. App room limit is 12 people. Per-second limits and subscription/auth traffic are not fully accounted for by room action reservations.
-- [Supabase cost control](https://supabase.com/docs/guides/platform/cost-control): Free is not charged; exceeding quotas can lead to restrictions. Pro's spend cap has exclusions and is not a zero-spend guarantee. Keep this project on Free.
-- [Supabase email](https://supabase.com/docs/guides/auth/auth-smtp): built-in email is restricted Auth testing (currently two/hour, team recipients); it does not replace a transactional warning sender.
-- [Resend quotas](https://resend.com/docs/knowledge-base/account-quotas-and-limits): Free rejects above 100 emails/UTC day or 3,000/month, counting inbound and outbound. Paid pricing supports automatic overages, so use Free and do not upgrade.
+Saving timer durations resets and pauses the active clock. Scheduling does not automatically start a timer. Guest video additions and owner schedule/timer edits all go through server checks. Videos load only on Watch and are not synchronized across devices.
 
-## Verification
+## Usage protection and limitations
 
-`npm test` uses embedded PostgreSQL (PGlite) for the real migration, timer persistence, pause enforcement and access policies, plus simulated coordinator budgets, concurrent joins near the limit, monthly warning deduplication, stale telemetry, cycle rollover and safe resume. It does not consume live provider quota. Supabase publication delivery itself is not simulated by PGlite.
+A locked database guard serializes reservations before admitting room operations. Defaults are warning at 90%, nominal pause at 97% and a 2 percentage point reserve, so the effective pause begins at 95%. The owner can lower thresholds or increase the reserve; nominal pause cannot exceed 97%.
 
-`npm run build` bundles the Supabase client locally. `npm run check` checks server and source JS. Optional `SMOKE_OWNER_KEY=... node scripts/smoke.mjs` checks the running local HTTP app without Supabase/email calls. Rendered desktop/mobile QA could not be performed because the browser-control host was unavailable. Live Supabase auth/realtime, account-specific Cloudflare GraphQL permissions/schema and real email require account configuration and remain unverified. Built-in collectors are tested against simulated provider responses; unsupported analytics schemas fail closed.
+Daily app budgets reserve 10,000 API requests, 10,000 database writes, 20,000 Realtime deliveries, 100 MB egress and 20 warning email attempts. A room request reserves twelve deliveries and 2 MiB fanout bytes. These are conservative app allocations, not provider-wide billing counters. Database capacity is measured with `pg_database_size` and compared to the Free plan’s 500 MB allowance. Capacity does not reset; daily allocations reset at midnight UTC. A reset never automatically clears a pause. Resume also checks room for the next admission, avoiding immediate reopen/pause loops.
 
-## Study-group schedule and LED table
+At a cutoff the transaction latches the guard closed, publishes the room pause once, and rejects joins and writes. Already paused guest requests do not rewrite guard or room storage. Clients unsubscribe, stop presence/auth refresh and unload the video on pause. A small guest preflight can redirect to the script-free paused page before loading the app or connecting to Realtime. Static hosting and that preflight still consume resources.
 
-For an existing installation, run `supabase/migrations/002_schedule_and_seating.sql` once in Supabase SQL Editor. Do not rerun migration 001. For a fresh installation, run 001 and then 002 in order. Migration 002 preserves website tables and current room data, adds member seat/color fields and a private schedule table, and updates the server-only mutation function in one transaction.
+Warnings are unique per quota/reset and claimed atomically, so two requests cannot send the same warning. Resend uses a stable idempotency key. Failed or uncertain delivery is shown for owner review. An attempt interrupted after claiming remains `sending`; it is not silently retried after the provider’s idempotency window. Email attempts have a separate reserve.
 
-As owner, open Room settings → Plan a study group. Add a title, local start/end times and optional notes, then publish. Sessions appear in Upcoming study groups; each visitor sees their own local timezone. Use Remove session to cancel or replace a session. Publishing is owner-only, respects room pause and quota checks, and does not automatically start a timer. Up to 24 sessions may be stored, with sessions limited to twelve hours.
+The app cannot measure or stop all GitHub Pages bandwidth/build usage, direct Supabase Auth/subscription traffic, failed function invocations, shared-project egress/MAU, delayed provider billing or unrelated website activity. Those limits are explicitly labeled in the dashboard. There is no claim of a guaranteed cutoff below 98% for unmeasurable or unstoppable traffic. A room pause cannot forcibly terminate every underlying Supabase client socket; it blocks writes and tells cooperating clients to unsubscribe.
 
-Choose an empty seat around the circular study table, then enter your display name and take a seat. You can also join without selecting one and receive the first available seat. Select another empty dot to move once connected. Guest LED colors are blue, green, amber, violet, cyan and orange. The server fixes owner LEDs to pink; guests cannot claim pink. Occupied seats show names and owner labels as well as their colors. Seat claims are serialized with a database lock and a unique seat index; if two people choose the same seat, only the first succeeds.
+No quota-consuming timer ticks or periodic background worker are scheduled. Active clients renew presence every two minutes, which also causes usage to be checked. Supabase database growth from another app may not be noticed until the next room request. Guests expire after three minutes without a lease refresh.
 
+Use Supabase Free, GitHub Pages Free and Resend Free. The app does not enable upgrades, add-ons or overages. Provider plan restrictions protect billing; the app guard protects room activity. A provider’s paid-plan spend cap is not assumed to cover every cost.
 
-## YouTube queue and custom timer durations
+## Checks
 
-After installing migrations 001 and 002, run `supabase/migrations/003_videos_and_timer_settings.sql` once. It extends the room mutation function without replacing room data or changing website tables.
+```sh
+npm test
+npm run check
+npm run build
+```
 
-Owner settings → Timer durations accepts 1–240 whole minutes for each mode. Saving resets and pauses the active clock for everyone. Mode switches and Reset use the saved durations, and late joiners receive the same timer state. These controls do not resume a room paused by its usage guard.
-
-Once seated, anyone can paste a YouTube video link with an optional label into the shared queue. The queue holds up to twenty distinct videos. Guests can remove their own additions; the owner can remove any video or advance the queue. Standard watch, short-link, Shorts, live-video and embed URLs are accepted; playlists and unrelated hosts are rejected. No YouTube Data API key or server-side metadata fetching is used.
-
-Watch loads the video directly from YouTube's privacy-enhanced embed host on that device, without autoplay. Playback is personal; play/pause positions are not synchronized. Queue changes are shared through Supabase. Advancing/removing a currently watched item unloads it, and room pause also unloads the player. Some videos cannot be embedded; Open on YouTube is available as a fallback. YouTube handles its own playback/network traffic, outside the room hosting quota. The site still never requests camera or microphone permissions.
+Tests use embedded PostgreSQL for migrations, RLS, ownership checks, concurrent admissions, quota pauses, rollover, schedule/seating, timers and queue permissions. Edge Function tests cover cross-origin access, signed owner tokens, user verification and invalid inputs. The static smoke check (`node scripts/smoke.mjs` while preview runs) checks the nested Pages path and paused page without sending email or using Realtime.

@@ -3,18 +3,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --port 8787",
-    "deploy": "wrangler deploy",
-    "test": "node --test",
-    "check": "node --check src/worker.js && node --check src/app.js",
-    "build": "esbuild src/app.js --bundle --format=esm --minify --outfile=public/app.js"
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "check": "node --check src/app.js && node --check supabase/functions/study-api/handler.js",
+    "deploy:backend": "node scripts/deploy-backend.mjs"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.16",
-    "wrangler": "^4.0.0"
+    "@electric-sql/pglite": "^0.5.16"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",
     "esbuild": "^0.28.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
